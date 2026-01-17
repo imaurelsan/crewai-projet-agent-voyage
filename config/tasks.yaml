@@ -1,0 +1,53 @@
+# Configuration des tâches
+research_task:
+  description: |
+    Rechercher des informations détaillées sur {destination}.
+    Incluez:
+    - Les attractions principales
+    - Les activités recommandées
+    - Les quartiers à visiter
+    - Les conseils pratiques
+  expected_output: |
+    Un rapport détaillé avec toutes les attractions et activités recommandées
+    pour {destination}, organisé par catégories.
+
+weather_task:
+  description: |
+    Analyser la météo actuelle à {destination} et fournir des recommandations.
+    Incluez:
+    - Les conditions actuelles
+    - Les conseils vestimentaires
+    - Les meilleures activités selon la météo
+  expected_output: |
+    Un rapport météo complet avec des recommandations pratiques pour le voyage.
+
+gastronomy_task:
+  description: |
+    Recommander les meilleures expériences culinaires à {destination}.
+    Incluez:
+    - Les spécialités locales à essayer
+    - Les meilleurs restaurants
+    - Les marchés et street food
+    - Le budget alimentaire moyen
+  expected_output: |
+    Un guide gastronomique avec recommandations de restaurants et plats typiques.
+
+budget_task:
+  description: |
+    Estimer le budget nécessaire pour un voyage à {destination}.
+    Incluez:
+    - Hébergement (gamme de prix)
+    - Transport local
+    - Restauration
+    - Activités et visites
+    - Budget total estimé
+  expected_output: |
+    Une estimation budgétaire détaillée avec différentes options (économique, moyen, luxe).
+
+coordination_task:
+  description: |
+    Synthétiser toutes les informations collectées sur {destination} et créer
+    un plan de voyage cohérent.
+    Combinez les informations de recherche, météo, gastronomie et budget.
+  expected_output: |
+    Un itinéraire de voyage complet et bien organisé avec toutes les recommandations.
