@@ -1,15 +1,15 @@
 from crewai import Agent
-from src.config import LLM_PROVIDER, OPENAI_MODEL_NAME, OLLAMA_MODEL, OLLAMA_BASE_URL
+from src.config import LLM_PROVIDER, GROQ_API_KEY, GROQ_MODEL, OPENAI_MODEL_NAME
 
 # Initialiser le LLM selon le provider
-if LLM_PROVIDER == "ollama":
-    from langchain_community.llms import Ollama
-    llm = Ollama(
-        model=OLLAMA_MODEL,
-        base_url=OLLAMA_BASE_URL,
+if LLM_PROVIDER == "groq":
+    from langchain_groq import ChatGroq
+    llm = ChatGroq(
+        api_key=GROQ_API_KEY,
+        model=GROQ_MODEL,
         temperature=0.7
     )
-    print(f"✅ Utilisation de Ollama avec le modèle: {OLLAMA_MODEL}")
+    print(f"✅ Utilisation de Groq avec le modèle: {GROQ_MODEL} (ultra-rapide!)")
 else:
     from langchain_openai import ChatOpenAI
     llm = ChatOpenAI(model=OPENAI_MODEL_NAME, temperature=0.7)

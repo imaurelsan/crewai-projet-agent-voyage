@@ -1,27 +1,34 @@
 #!/usr/bin/env python
-"""Exemple simple pour tester Ollama avec LangChain"""
+"""Exemple simple pour tester Groq avec LangChain (ultra-rapide et gratuit!)"""
 
 import os
 from dotenv import load_dotenv
-from langchain_ollama import OllamaLLM
+from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 
 # Charger les variables d'environnement
 load_dotenv()
 
 # Configuration
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile")
+
+if not GROQ_API_KEY:
+    raise ValueError(
+        "GROQ_API_KEY non défini!\n"
+        "Obtenez une clé gratuite sur: https://console.groq.com\n"
+        "Puis ajoutez dans .env: GROQ_API_KEY=gsk_..."
+    )
 
 # Initialiser le LLM
-llm = OllamaLLM(
-    model=OLLAMA_MODEL,
-    base_url=OLLAMA_BASE_URL,
+llm = ChatGroq(
+    api_key=GROQ_API_KEY,
+    model=GROQ_MODEL,
     temperature=0.7
 )
 
-print(f"✅ Utilisation de Ollama - Modèle: {OLLAMA_MODEL}")
-print(f"✅ Connexion: {OLLAMA_BASE_URL}\n")
+print(f"✅ Utilisation de Groq - Modèle: {GROQ_MODEL}")
+print("✨ Groq est ultra-rapide et 100% gratuit!\n")
 
 # Template pour l'agent de voyage
 prompt_template = ChatPromptTemplate.from_template("""

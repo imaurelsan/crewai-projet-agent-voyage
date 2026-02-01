@@ -1,23 +1,29 @@
 #!/usr/bin/env python
-"""Agent Weather Specialist avec outils pour récupérer la météo réelle"""
+"""Agent Weather Specialist avec outils pour récupérer la météo réelle (Groq ultra-rapide!)"""
 
 import os
 import requests
 from dotenv import load_dotenv
-from langchain_ollama import OllamaLLM
+from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import tool
 
 load_dotenv()
 
 # Configuration
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile")
+
+if not GROQ_API_KEY:
+    raise ValueError(
+        "GROQ_API_KEY non défini! Obtenez une clé gratuite sur https://console.groq.com"
+    )
 
 # Initialiser le LLM
-llm = OllamaLLM(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL, temperature=0.7)
+llm = ChatGroq(api_key=GROQ_API_KEY, model=GROQ_MODEL, temperature=0.7)
 
-print(f"✅ Weather Specialist Agent - Modèle: {OLLAMA_MODEL}\n")
+print(f"✅ Weather Specialist Agent - Modèle: {GROQ_MODEL}")
+print("⚡ Vitesse Groq: 10x plus rapide!\n")
 
 # ============= OUTILS MÉTÉO =============
 

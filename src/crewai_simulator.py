@@ -7,15 +7,20 @@ import os
 import yaml
 from typing import List, Dict, Any, Callable
 from functools import wraps
-from langchain_ollama import OllamaLLM
+from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # ============= Configuration =============
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile")
+
+if not GROQ_API_KEY:
+    raise ValueError(
+        "GROQ_API_KEY non défini. Obtenez une clé gratuite sur https://console.groq.com"
+    )
 
 
 # ============= Classes de Base =============
@@ -60,20 +65,24 @@ class Crew:
         self.tasks = tasks
         self.verbose = verbose
         self.process = process
-        self.llm = OllamaLLM(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL, temperature=0.7)
+        self.llm = ChatGroq(
+            api_key=GROQ_API_KEY,
+            model=GROQ_MODEL,
+            temperature=0.7
+        )
         
     def kickoff(self, inputs: Dict[str, Any] = None) -> str:
         """Lance l'exécution de l'équipe"""
         inputs = inputs or {}
         
         if self.verbose:
-            print("=" * 70)
+            print("="* 70)
             print("🚀 DÉMARRAGE DE L'ÉQUIPE")
             print("=" * 70)
             print(f"📋 Agents: {len(self.agents)}")
             print(f"📝 Tâches: {len(self.tasks)}")
             print(f"⚙️  Processus: {self.process}")
-            print(f"🤖 LLM: {OLLAMA_MODEL}")
+            print(f"🤖 LLM: {GROQ_MODEL} (Groq - ultra-rapide!)")
             print("=" * 70)
             print()
         
@@ -232,13 +241,13 @@ class Process:
 class LLM:
     """Wrapper pour le LLM compatible avec la syntaxe CrewAI"""
     
-    def __init__(self, model: str = None, temperature: float = 0.7, base_url: str = None):
-        self.model = model or OLLAMA_MODEL
+    def __init__(self, model: str = None, temperature: float = 0.7, api_key: str = None):
+        self.model = model or GROQ_MODEL
         self.temperature = temperature
-        self.base_url = base_url or OLLAMA_BASE_URL
-        self._llm = OllamaLLM(
+        self.api_key = api_key or GROQ_API_KEY
+        self._llm = ChatGroq(
+            api_key=self.api_key,
             model=self.model,
-            base_url=self.base_url,
             temperature=self.temperature
         )
     
