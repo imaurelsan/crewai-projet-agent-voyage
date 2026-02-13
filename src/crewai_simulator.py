@@ -1,29 +1,78 @@
 """
-Simulateur CrewAI utilisant LangChain + Ollama
+Simulateur CrewAI utilisant LangChain + Groq
 Imite l'architecture CrewAI pour compatibilité avec les exemples de cours
 """
 
 import os
+import re
+from datetime import date
 import yaml
-from typing import List, Dict, Any, Callable
+from typing import List, Dict, Any, Callable, Optional, Type
 from functools import wraps
-from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from dotenv import load_dotenv
+from pydantic import BaseModel
 
 load_dotenv()
 
-# ============= Configuration =============
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile")
+# ============= Configuration LLM =============
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq").lower()
 
-if not GROQ_API_KEY:
-    raise ValueError(
-        "GROQ_API_KEY non défini. Obtenez une clé gratuite sur https://console.groq.com"
-    )
+if LLM_PROVIDER == "openrouter":
+    from langchain_openai import ChatOpenAI
+    OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+    OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct:free")
+    if not OPENROUTER_API_KEY:
+        raise ValueError("OPENROUTER_API_KEY non défini. Obtenez une clé sur https://openrouter.ai/keys")
+else:  # groq par defaut
+    from langchain_groq import ChatGroq
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+    GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+    if not GROQ_API_KEY:
+        raise ValueError("GROQ_API_KEY non défini. Obtenez une clé sur https://console.groq.com")
 
 
 # ============= Classes de Base =============
+
+class BaseTool:
+    """Outil custom minimaliste (style CrewAI) avec validation simple."""
+
+    name: str = "custom_tool"
+    description: str = "Custom tool"
+    args_schema: Optional[Type[BaseModel]] = None
+
+    def invoke(self, inputs: Dict[str, Any]) -> str:
+        """Point d'entree unique compatible avec le simulateur."""
+        payload = inputs
+        if self.args_schema:
+            model = self.args_schema(**inputs)
+            payload = model.model_dump() if hasattr(model, "model_dump") else model.dict()
+        return self._run(**payload)
+
+    def _run(self, **kwargs: Any) -> str:
+        raise NotImplementedError("Custom tool must implement _run().")
+
+
+class SimpleMemory:
+    """Memoire partagee simple en RAM (liste d'entrees)."""
+
+    def __init__(self, max_items: int = 20):
+        self.max_items = max_items
+        self._items: List[Dict[str, str]] = []
+
+    def add(self, role: str, content: str) -> None:
+        self._items.append({"role": role, "content": content})
+        if len(self._items) > self.max_items:
+            self._items.pop(0)
+
+    def get_context(self) -> str:
+        if not self._items:
+            return ""
+        lines = [f"{item['role']}: {item['content']}" for item in self._items]
+        return "\n".join(lines)
+
+    def clear(self) -> None:
+        self._items = []
 
 class Agent:
     """Simule un agent CrewAI"""
@@ -60,16 +109,29 @@ class Crew:
     """Simule une équipe CrewAI"""
     
     def __init__(self, agents: List[Agent], tasks: List[Task], 
-                 verbose: bool = True, process: str = "sequential"):
+                 verbose: bool = True, process: str = "sequential", memory: bool = False):
         self.agents = agents
         self.tasks = tasks
         self.verbose = verbose
         self.process = process
-        self.llm = ChatGroq(
-            api_key=GROQ_API_KEY,
-            model=GROQ_MODEL,
-            temperature=0.7
-        )
+        self.memory = SimpleMemory() if memory else None
+        
+        # Configuration du LLM selon le provider
+        if LLM_PROVIDER == "openrouter":
+            self.llm = ChatOpenAI(
+                api_key=OPENROUTER_API_KEY,
+                model=OPENROUTER_MODEL,
+                base_url="https://openrouter.ai/api/v1",
+                temperature=0.3,
+                max_tokens=800
+            )
+        else:
+            self.llm = ChatGroq(
+                api_key=GROQ_API_KEY,
+                model=GROQ_MODEL,
+                temperature=0.3,
+                max_tokens=800
+            )
         
     def kickoff(self, inputs: Dict[str, Any] = None) -> str:
         """Lance l'exécution de l'équipe"""
@@ -88,6 +150,11 @@ class Crew:
         
         results = []
         context_history = ""
+
+        if self.memory:
+            shared_memory = self.memory.get_context()
+            if shared_memory and self.verbose:
+                print("🧠 Memoire partagee activee")
         
         for i, task in enumerate(self.tasks, 1):
             if self.verbose:
@@ -109,36 +176,41 @@ class Crew:
                         agent_role = context_task.agent.role if context_task.agent else "Agent"
                         full_context += f"\n\nContexte de '{agent_role}':\n{results[j]}"
             
-            # Créer le prompt
+            # Créer le prompt (optimisé pour bien suivre les instructions)
+            # Extraire les infos clés pour les mettre en avant
+            destination = inputs.get("destination", "destination inconnue")
+            duration = inputs.get("duration", "3")
+            budget = inputs.get("budget", "moyen")
+            origin = inputs.get("origin", "origine inconnue")
+            
             if full_context:
-                prompt_text = f"""Tu es {task.agent.role}.
+                prompt_text = f"""Rôle: {task.agent.role}
+Objectif: {task.agent.goal}
 
-Ton objectif: {task.agent.goal}
+INFORMATIONS IMPORTANTES:
+- Destination: {destination}
+- Durée: {duration} jours
+- Budget: {budget}
+- Départ: {origin}
 
-Background: {task.agent.backstory}
+Contexte: {full_context[-1500:]}
 
-Contexte des tâches précédentes:
-{full_context}
+Tâche: {description}
 
-Tâche à accomplir:
-{description}
-
-Output attendu: {task.expected_output}
-
-Réponds de manière détaillée et professionnelle."""
+IMPORTANT: Concentre-toi UNIQUEMENT sur {destination}. Ne propose JAMAIS d'autres destinations."""
             else:
-                prompt_text = f"""Tu es {task.agent.role}.
+                prompt_text = f"""Rôle: {task.agent.role}
+Objectif: {task.agent.goal}
 
-Ton objectif: {task.agent.goal}
+INFORMATIONS IMPORTANTES:
+- Destination: {destination}
+- Durée: {duration} jours
+- Budget: {budget}
+- Départ: {origin}
 
-Background: {task.agent.backstory}
+Tâche: {description}
 
-Tâche à accomplir:
-{description}
-
-Output attendu: {task.expected_output}
-
-Réponds de manière détaillée et professionnelle."""
+IMPORTANT: Concentre-toi UNIQUEMENT sur {destination}. Ne propose JAMAIS d'autres destinations."""
             
             # Exécuter avec le LLM
             if self.verbose:
@@ -149,29 +221,43 @@ Réponds de manière détaillée et professionnelle."""
                 # Appeler les outils si nécessaire
                 tool_results = []
                 for tool in task.agent.tools:
-                    if callable(tool):
-                        try:
-                            # Extraire les paramètres depuis les inputs
+                    try:
+                        if hasattr(tool, "args_schema") and tool.args_schema:
+                            required_fields = [
+                                name
+                                for name, field in tool.args_schema.model_fields.items()
+                                if field.is_required()
+                            ]
+                            if any(field not in inputs for field in required_fields):
+                                continue
+                        if hasattr(tool, "invoke"):
                             tool_result = tool.invoke(inputs)
                             tool_results.append(tool_result)
-                        except Exception as e:
-                            if self.verbose:
-                                print(f"⚠️  Erreur outil: {e}")
+                        elif callable(tool):
+                            tool_result = tool(inputs)
+                            tool_results.append(tool_result)
+                    except Exception as e:
+                        if self.verbose:
+                            print(f"⚠️  Erreur outil: {e}")
                 
                 if tool_results:
                     prompt_text += f"\n\nRésultats des outils:\n" + "\n".join(tool_results)
             
             result = self.llm.invoke(prompt_text)
-            results.append(result)
-            context_history += f"\n\n=== {task.agent.role} ===\n{result}"
+            result_text = result.content if hasattr(result, "content") else str(result)
+            results.append(result_text)
+            context_history += f"\n\n=== {task.agent.role} ===\n{result_text}"
+
+            if self.memory:
+                self.memory.add(task.agent.role, result_text)
             
             if self.verbose:
-                print(f"✅ Résultat:\n{result}")
+                print(f"✅ Résultat:\n{result_text}")
             
             # Sauvegarder dans un fichier si spécifié
             if task.output_file:
                 with open(task.output_file, 'w', encoding='utf-8') as f:
-                    f.write(result)
+                    f.write(result_text)
                 if self.verbose:
                     print(f"💾 Sauvegardé dans: {task.output_file}")
         
@@ -182,6 +268,159 @@ Réponds de manière détaillée et professionnelle."""
         
         # Retourner le dernier résultat (généralement la synthèse finale)
         return results[-1] if results else ""
+
+
+def run_telegram_bot(crew_factory: Callable[[], Crew], token: Optional[str] = None) -> None:
+    """Handler Telegram minimaliste (polling) qui envoie le texte a un crew.
+
+    Usage:
+        from src.crewai_simulator import run_telegram_bot
+        from src.crew_voyage_complet import CompleteTravelCrew
+
+        run_telegram_bot(lambda: CompleteTravelCrew().crew())
+    """
+    token = token or os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token:
+        raise ValueError(
+            "TELEGRAM_BOT_TOKEN non defini. Ajoutez-le dans votre .env."
+        )
+    try:
+        from telegram import Update
+        from telegram.ext import Application, MessageHandler, filters
+    except Exception as exc:
+        raise ImportError(
+            "Installez python-telegram-bot: pip install python-telegram-bot"
+        ) from exc
+
+    def _extract_travel_inputs(text: str) -> Dict[str, str]:
+        """Extraction naive des infos depuis un texte libre (version debutant)."""
+        data: Dict[str, str] = {}
+
+        months = {
+            "janvier": 1,
+            "fevrier": 2,
+            "février": 2,
+            "mars": 3,
+            "avril": 4,
+            "mai": 5,
+            "juin": 6,
+            "juillet": 7,
+            "aout": 8,
+            "août": 8,
+            "septembre": 9,
+            "octobre": 10,
+            "novembre": 11,
+            "decembre": 12,
+            "décembre": 12,
+        }
+
+        def _parse_date(day_str: str, month_str: str) -> date:
+            year = date.today().year
+            month = months.get(month_str.lower())
+            if not month:
+                return None
+            return date(year, month, int(day_str))
+
+        # Destination
+        match = re.search(r"\bje vais\s+(?:au|a|à|aux|en)\s+([^,\.\n]+)", text, re.IGNORECASE)
+        if match:
+            data["destination"] = match.group(1).strip()
+
+        # Origine
+        match = re.search(r"\bje pars\s+de\s+([^,\.\n]+)", text, re.IGNORECASE)
+        if match:
+            data["origin"] = match.group(1).strip()
+
+        # Duree
+        match = re.search(r"\b(pour|pendant)\s+(\d+)\s+jours\b", text, re.IGNORECASE)
+        if match:
+            data["duration"] = match.group(2).strip()
+
+        # Dates debut/fin (ex: "le 28 fevrier" / "je reviens le 31 mars")
+        start_match = re.search(r"\ble\s+(\d{1,2})\s+([a-zA-Zéûîôàù]+)", text, re.IGNORECASE)
+        end_match = re.search(r"\bje reviens\s+le\s+(\d{1,2})\s+([a-zA-Zéûîôàù]+)", text, re.IGNORECASE)
+        if start_match and end_match and "duration" not in data:
+            start_date = _parse_date(start_match.group(1), start_match.group(2))
+            end_date = _parse_date(end_match.group(1), end_match.group(2))
+            if start_date and end_date:
+                if end_date < start_date:
+                    end_date = date(start_date.year + 1, end_date.month, end_date.day)
+                duration_days = (end_date - start_date).days + 1
+                if duration_days > 0:
+                    data["duration"] = str(duration_days)
+
+        # Budget (mot ou montant)
+        match = re.search(r"\bbudget\s+(\d+)\s*€?", text, re.IGNORECASE)
+        if match:
+            amount = int(match.group(1))
+            if amount < 800:
+                data["budget"] = "economique"
+            elif amount < 2000:
+                data["budget"] = "moyen"
+            else:
+                data["budget"] = "luxe"
+        else:
+            match = re.search(r"\bbudget\s+(economique|économique|moyen|luxe)\b", text, re.IGNORECASE)
+            if match:
+                data["budget"] = match.group(1).replace("é", "e").lower()
+
+        return data
+
+    def _split_telegram_message(text: str, max_len: int = 3500) -> List[str]:
+        """Decoupe un long message pour respecter la limite Telegram."""
+        if len(text) <= max_len:
+            return [text]
+        parts = []
+        start = 0
+        while start < len(text):
+            parts.append(text[start:start + max_len])
+            start += max_len
+        return parts
+
+    async def handle_message(update: Update, context) -> None:
+        user_text = update.message.text if update.message else ""
+        if not user_text:
+            return
+
+        await update.message.reply_text("🤖 Je prepare votre voyage...")
+        crew = crew_factory()
+        crew.verbose = False  # Desactiver logs pour economiser tokens
+
+        inputs = {"user_request": user_text}
+        extracted = _extract_travel_inputs(user_text)
+        if extracted:
+            inputs.update(extracted)
+
+        # Valeurs par defaut si une info manque
+        inputs.setdefault("destination", "destination inconnue")
+        inputs.setdefault("origin", "origine inconnue")
+        inputs.setdefault("duration", "3")
+        inputs.setdefault("budget", "moyen")
+
+        try:
+            result = crew.kickoff(inputs=inputs)
+            result_text = result.content if hasattr(result, "content") else str(result)
+            for chunk in _split_telegram_message(result_text):
+                await update.message.reply_text(chunk)
+        except Exception as exc:
+            print(f"\n❌ ERREUR BOT: {type(exc).__name__}")
+            print(f"📝 Message: {str(exc)}")
+            import traceback
+            traceback.print_exc()
+            
+            message = str(exc)
+            if "rate_limit" in message.lower() or "RateLimitError" in message or "429" in message:
+                await update.message.reply_text(
+                    "⚠️ Limite Groq atteinte. Reessayez dans quelques minutes."
+                )
+            else:
+                await update.message.reply_text(
+                    f"⚠️ Erreur: {type(exc).__name__}"
+                )
+
+    app = Application.builder().token(token).build()
+    app.add_handler(MessageHandler(filters.TEXT, handle_message))
+    app.run_polling()
 
 
 # ============= Décorateurs =============
@@ -253,3 +492,39 @@ class LLM:
     
     def __repr__(self):
         return f"LLM(model='{self.model}')"
+
+
+# ============= Point d'entrée pour le bot Telegram =============
+
+if __name__ == "__main__":
+    print("🤖 Démarrage du bot Telegram...")
+    if LLM_PROVIDER == "openrouter":
+        print(f"📡 Provider: OpenRouter")
+        print(f"📡 Modèle: {OPENROUTER_MODEL}")
+    else:
+        print(f"📡 Provider: Groq")
+        print(f"📡 Modèle: {GROQ_MODEL}")
+    
+    try:
+        from src.crew_voyage_complet import CompleteTravelCrew
+        run_telegram_bot(lambda: CompleteTravelCrew().crew())
+    except ImportError as e:
+        print(f"⚠️ Impossible d'importer CompleteTravelCrew: {e}")
+        print("📝 Création d'un crew simple...")
+        
+        # Crew minimal de secours
+        def simple_crew():
+            agent = Agent(
+                role="Planificateur de voyage",
+                goal="Créer un plan de voyage simple",
+                backstory="Expert en voyages",
+                verbose=False
+            )
+            task = Task(
+                description="Crée un plan pour: {destination}, durée: {duration} jours, budget: {budget}",
+                expected_output="Un guide concis",
+                agent=agent
+            )
+            return Crew(agents=[agent], tasks=[task], verbose=False)
+        
+        run_telegram_bot(simple_crew)
