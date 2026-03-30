@@ -1,94 +1,138 @@
-# CrewAI Travel Planner (Telegram + CLI)
+# CrewAI Travel Planner — Structured Output, Collaboration & MCP
 
-This project is a beginner-friendly, multi-agent travel planner. It includes:
-- A CrewAI-like simulator compatible with Python 3.13
-- Custom tools and shared memory
-- A Telegram bot handler
-- LLM support for Groq or OpenRouter
+Projet pédagogique (débutant-friendly) qui implémente un système multi-agents complet autour de 3 briques:
 
-The goal is simple: send a natural language travel request and get a structured travel plan.
+1. Structured output (format de réponse exploitable)
+2. Agents collaboration (délégation + questions inter-agents)
+3. Intégration MCP (FileSystem local)
 
-## What was built
+Le projet reste compatible Python 3.13 via un simulateur CrewAI maison.
 
-- Multi-agent workflow (research, weather, hotels, transport, activities, synthesis)
-- Custom tools via a minimal BaseTool pattern
-- Shared in-memory context between tasks
-- Telegram bot that accepts user messages and replies with a plan
-- Input extraction (destination, origin, duration, budget, dates)
+## Ce qui a été implémenté
 
-## Quick start
+### 1) Structured Output (rappel)
+- Support d'un flux orienté données structurées (type Pydantic) côté orchestration.
+- Objectif: produire des sorties plus fiables et faciles à réutiliser (API, UI, stockage).
 
-### 1) Create and activate venv
+### 2) Agents Collaboration (nouveau)
+Implémentation des patterns recommandés:
+
+- **Clear role definition**: rôles spécialisés et non ambigus
+- **Strategic delegation**: `allow_delegation=True` pour les coordinateurs, `False` pour les spécialistes
+- **Context sharing**: transmission de contexte entre étapes
+- **Clear task descriptions**: instructions explicites et actionnables
+
+Nouveaux composants:
+- [src/agents_collaboration.py](src/agents_collaboration.py)
+	- `CollaborationOrchestrator`
+	- `DelegateWorkTool`
+	- `AskQuestionTool`
+	- Patterns:
+		- Research → Write → Edit
+		- Collaborative Single Task
+		- Hierarchical Collaboration (manager + spécialistes)
+
+### 3) MCP Integration (nouveau)
+Intégration d'un MCP **FileSystem local**:
+
+- `MCPFilesystemTool` dans [src/agents_collaboration.py](src/agents_collaboration.py)
+- Actions supportées:
+	- `list_directory`
+	- `read_file`
+- Sécurisation par racine (empêche l'accès hors dossier autorisé)
+
+### 4) Base simulateur enrichie
+- `Agent` supporte désormais `allow_delegation` dans [src/crewai_simulator.py](src/crewai_simulator.py)
+
+## Architecture rapide
+
+- [src/crewai_simulator.py](src/crewai_simulator.py): simulateur CrewAI, mémoire partagée, bot Telegram
+- [src/crew_voyage_complet.py](src/crew_voyage_complet.py): crew voyage historique
+- [src/agents_collaboration.py](src/agents_collaboration.py): orchestration collaboration + MCP
+- [src/agents_collaboration_demo.py](src/agents_collaboration_demo.py): démo complète exécutable
+- [src/tools/travel_tools.py](src/tools/travel_tools.py): outils métier voyage
+
+## Routing automatique Complexité x Précision
+
+Le bot Telegram applique une matrice de décision inspirée de la doc CrewAI pour choisir l'orchestration:
+
+- **Low complexity (1-4), Low precision (1-4)** → `Simple Crew`
+- **Low complexity (1-4), High precision (5-10)** → `Direct Flow` (appel LLM direct, contraintes strictes)
+- **High complexity (5-10), Low precision (1-4)** → `Complex Crew` (crew voyage complet)
+- **High complexity (5-10), High precision (5-10)** → `Orchestrated Flow` (collaboration hiérarchique + MCP)
+
+Implémentation:
+- `OrchestrationRouter` dans [src/crewai_simulator.py](src/crewai_simulator.py)
+- `DirectFlowAdapter` dans [src/crewai_simulator.py](src/crewai_simulator.py)
+- `CollaborationCrewAdapter` dans [src/agents_collaboration.py](src/agents_collaboration.py)
+
+## Installation
 
 ```powershell
 py -3.13 -m venv venv
 .\venv\Scripts\Activate.ps1
-```
-
-### 2) Install dependencies
-
-```powershell
 pip install -r requirements.txt
 pip install python-telegram-bot langchain-openai
 ```
 
-### 3) Configure environment
+Configurer [.env](.env):
+- `LLM_PROVIDER=groq` ou `openrouter`
+- clé API correspondante
+- `TELEGRAM_BOT_TOKEN` pour le bot
 
-Edit [.env](.env) and set:
-- `LLM_PROVIDER` (groq or openrouter)
-- LLM API key and model
-- `TELEGRAM_BOT_TOKEN`
+## Exécution
 
-Setup guides:
-- [GROQ_SETUP.md](GROQ_SETUP.md)
-- [OPENROUTER_SETUP.md](OPENROUTER_SETUP.md)
-- [QUICKSTART.md](QUICKSTART.md)
-
-## Run
-
-### Telegram bot
+### A. Bot Telegram (cas d'usage voyage)
 
 ```powershell
 .\venv\Scripts\python.exe src/crewai_simulator.py
 ```
 
-Example message:
-```
-Je vais au Senegal le 28 fevrier, je reviens le 31 mars, budget 4000€, je pars de Paris.
-```
+Par défaut, ce lancement active maintenant le mode collaboration:
+- Delegate Work Tool
+- Ask Question Tool
+- Orchestration hiérarchique
+- MCP FileSystem local
 
-### CLI (crew only)
+Exemple message:
+`Je vais au Senegal le 28 fevrier, je reviens le 31 mars, budget 4000€, je pars de Paris.`
 
-```powershell
-.\venv\Scripts\python.exe src/crew_voyage_complet.py
-```
-
-## Tests
+### B. Démo Agents Collaboration + MCP
 
 ```powershell
-.\venv\Scripts\python.exe test_outils.py
-.\venv\Scripts\python.exe test_groq_config.py
+.\venv\Scripts\python.exe src/agents_collaboration_demo.py
 ```
 
-## Project structure (main files)
+La démo exécute:
+1. Delegate Work Tool
+2. Ask Question Tool
+3. Pattern Research-Write-Edit
+4. Pattern Collaborative Single Task
+5. Pattern Hiérarchique
 
-- [src/crewai_simulator.py](src/crewai_simulator.py): simulator, memory, telegram handler
-- [src/crew_voyage_complet.py](src/crew_voyage_complet.py): full multi-agent crew
-- [src/tools/travel_tools.py](src/tools/travel_tools.py): travel tools
-- [config/agents.yaml](config/agents.yaml) and [config/tasks.yaml](config/tasks.yaml)
+## Best practices appliquées
 
-## Troubleshooting
+- Rôles complémentaires (pas de chevauchement)
+- Délégation uniquement pour rôles coordinateurs
+- Spécialistes focalisés sur leur expertise
+- Context sharing contrôlé entre étapes
+- Mémoire partagée pour continuité inter-agents
+- Tâches explicites avec résultats attendus
+- Intégration MCP outillée et sécurisée
 
-- If you hit Groq rate limits, switch to OpenRouter in [.env](.env)
-- If Telegram returns no reply, ensure only one bot instance is running
-- If import errors appear, run from the repo root with the venv active
+## Dépannage
 
-## Summary
+- Rate limit Groq: basculer vers OpenRouter dans [.env](.env)
+- Conflit Telegram `getUpdates`: garder une seule instance du bot
+- Erreur import: lancer les commandes depuis la racine du repo
 
-This repo delivers a complete, working travel planning assistant with:
-- Multi-agent workflow
-- Tooling and shared memory
-- Telegram interface
-- LLM provider flexibility
+## Résumé intégral du travail
 
-It is ready for anyone to clone, configure, and run.
+Ce projet implémente maintenant un système d'orchestration multi-agents complet:
+
+- **Structured Output** pour des réponses exploitables
+- **Collaboration inter-agents** avec délégation + questions expert
+- **Processus séquentiel et hiérarchique** selon la complexité
+- **MCP FileSystem** intégré pour connecter les agents à des ressources locales
+
+Tu peux l'utiliser tel quel pour apprendre les patterns CrewAI de collaboration, puis le faire évoluer vers d'autres MCP (HTTP/SSE, outils distants, marketplace AMP).

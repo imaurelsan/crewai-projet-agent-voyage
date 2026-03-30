@@ -5,6 +5,7 @@ Imite l'architecture CrewAI pour compatibilité avec les exemples de cours
 
 import os
 import re
+import sys
 from datetime import date
 import yaml
 from typing import List, Dict, Any, Callable, Optional, Type
@@ -14,6 +15,11 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 
 load_dotenv()
+
+# Permet d'exécuter `python src/crewai_simulator.py` tout en gardant les imports `src.*`
+PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 # ============= Configuration LLM =============
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq").lower()
@@ -78,13 +84,15 @@ class Agent:
     """Simule un agent CrewAI"""
     
     def __init__(self, role: str, goal: str, backstory: str, 
-                 verbose: bool = True, tools: List = None, llm: Any = None):
+                 verbose: bool = True, tools: List = None, llm: Any = None,
+                 allow_delegation: bool = False):
         self.role = role
         self.goal = goal
         self.backstory = backstory
         self.verbose = verbose
         self.tools = tools or []
         self.llm = llm
+        self.allow_delegation = allow_delegation
         
     def __repr__(self):
         return f"Agent(role='{self.role}')"
@@ -383,8 +391,6 @@ def run_telegram_bot(crew_factory: Callable[[], Crew], token: Optional[str] = No
             return
 
         await update.message.reply_text("🤖 Je prepare votre voyage...")
-        crew = crew_factory()
-        crew.verbose = False  # Desactiver logs pour economiser tokens
 
         inputs = {"user_request": user_text}
         extracted = _extract_travel_inputs(user_text)
@@ -396,6 +402,14 @@ def run_telegram_bot(crew_factory: Callable[[], Crew], token: Optional[str] = No
         inputs.setdefault("origin", "origine inconnue")
         inputs.setdefault("duration", "3")
         inputs.setdefault("budget", "moyen")
+
+        try:
+            crew = crew_factory(inputs)
+        except TypeError:
+            crew = crew_factory()
+
+        if hasattr(crew, "verbose"):
+            crew.verbose = False  # Desactiver logs pour economiser tokens
 
         try:
             result = crew.kickoff(inputs=inputs)
@@ -494,6 +508,119 @@ class LLM:
         return f"LLM(model='{self.model}')"
 
 
+class DirectFlowAdapter:
+    """Flow direct: un seul appel LLM avec contraintes strictes (haute précision, faible complexité)."""
+
+    def __init__(self):
+        self.verbose = False
+        self._llm = Crew(agents=[], tasks=[], verbose=False).llm
+
+    def kickoff(self, inputs: Dict[str, Any] = None) -> str:
+        inputs = inputs or {}
+        destination = inputs.get("destination", "destination inconnue")
+        origin = inputs.get("origin", "origine inconnue")
+        duration = inputs.get("duration", "3")
+        budget = inputs.get("budget", "moyen")
+        request = inputs.get("user_request", "Prépare un plan de voyage")
+
+        prompt = f"""Tu dois produire une réponse précise et concise.
+
+Demande utilisateur: {request}
+Contraintes obligatoires:
+- Destination: {destination}
+- Départ: {origin}
+- Durée: {duration} jours
+- Budget: {budget}
+
+Donne un plan clair en sections: transport, hébergement, activités, budget estimatif.
+Ne propose aucune autre destination que {destination}."""
+
+        result = self._llm.invoke(prompt)
+        return result.content if hasattr(result, "content") else str(result)
+
+
+class OrchestrationRouter:
+    """Route automatiquement vers Crew ou Flow selon complexité x précision."""
+
+    def __init__(self, project_root: str):
+        self.project_root = project_root
+        self.last_decision = "unknown"
+
+    @staticmethod
+    def _score_complexity(inputs: Dict[str, Any]) -> int:
+        text = (inputs.get("user_request") or "").lower()
+        score = 1
+        constraints = [
+            "destination", "origin", "duration", "budget"
+        ]
+        score += sum(1 for key in constraints if inputs.get(key) and "inconnue" not in str(inputs.get(key)).lower())
+
+        complexity_keywords = [
+            "compar", "plusieurs", "multi", "itiner", "itinér", "optimis", "risque", "scenario", "scénario",
+            "roadmap", "90 jours", "phase", "coord", "hiérarch"
+        ]
+        if any(keyword in text for keyword in complexity_keywords):
+            score += 3
+
+        if len(text) > 220:
+            score += 1
+
+        return max(1, min(score, 10))
+
+    @staticmethod
+    def _score_precision(inputs: Dict[str, Any]) -> int:
+        text = (inputs.get("user_request") or "").lower()
+        score = 1
+
+        if inputs.get("destination") and "inconnue" not in str(inputs.get("destination")).lower():
+            score += 2
+        if inputs.get("duration") and str(inputs.get("duration")).isdigit():
+            score += 2
+        if inputs.get("budget") and "inconnu" not in str(inputs.get("budget")).lower():
+            score += 2
+        if inputs.get("origin") and "inconnue" not in str(inputs.get("origin")).lower():
+            score += 1
+
+        precision_keywords = ["exact", "précis", "precis", "contraintes", "budget", "dates", "éviter", "uniquement"]
+        if any(keyword in text for keyword in precision_keywords):
+            score += 2
+
+        return max(1, min(score, 10))
+
+    def __call__(self, inputs: Dict[str, Any] = None):
+        inputs = inputs or {}
+        complexity = self._score_complexity(inputs)
+        precision = self._score_precision(inputs)
+
+        if complexity <= 4 and precision <= 4:
+            self.last_decision = "simple_crew"
+            agent = Agent(
+                role="Assistant Voyage",
+                goal="Fournir un plan de voyage simple",
+                backstory="Assistant orienté réponses rapides",
+                verbose=False,
+            )
+            task = Task(
+                description="Créer un plan simple pour {destination}, {duration} jours, budget {budget}.",
+                expected_output="Plan simple en 4 sections",
+                agent=agent,
+            )
+            return Crew(agents=[agent], tasks=[task], verbose=False)
+
+        if complexity <= 4 and precision >= 5:
+            self.last_decision = "direct_flow"
+            return DirectFlowAdapter()
+
+        if complexity >= 5 and precision <= 4:
+            self.last_decision = "complex_crew"
+            from src.crew_voyage_complet import CompleteTravelCrew
+            return CompleteTravelCrew().crew()
+
+        self.last_decision = "orchestrated_flow"
+        from src.agents_collaboration import create_collaboration_crew
+        return create_collaboration_crew(self.project_root)
+
+
 # ============= Point d'entrée pour le bot Telegram =============
 
 if __name__ == "__main__":
@@ -506,14 +633,14 @@ if __name__ == "__main__":
         print(f"📡 Modèle: {GROQ_MODEL}")
     
     try:
-        from src.crew_voyage_complet import CompleteTravelCrew
-        run_telegram_bot(lambda: CompleteTravelCrew().crew())
-    except ImportError as e:
-        print(f"⚠️ Impossible d'importer CompleteTravelCrew: {e}")
-        print("📝 Création d'un crew simple...")
-        
-        # Crew minimal de secours
-        def simple_crew():
+        print("🧭 Mode auto-routing actif (complexité x précision)")
+        router = OrchestrationRouter(PROJECT_ROOT)
+        run_telegram_bot(router)
+    except Exception as routing_error:
+        print(f"⚠️ Auto-routing indisponible: {routing_error}")
+        print("↩️ Fallback vers crew simple...")
+
+        def simple_crew(_inputs: Dict[str, Any] = None):
             agent = Agent(
                 role="Planificateur de voyage",
                 goal="Créer un plan de voyage simple",
@@ -526,5 +653,5 @@ if __name__ == "__main__":
                 agent=agent
             )
             return Crew(agents=[agent], tasks=[task], verbose=False)
-        
+
         run_telegram_bot(simple_crew)
